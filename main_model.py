@@ -10,7 +10,6 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 from ultralytics import YOLO
 
-# ---------- SETTINGS (change these to tune speed) ----------
 MODEL_NAME = "yolov8s.pt"   # n = fastest, s = more accurate but slower
 IMG_SIZE = 640              # smaller = faster (try 480, 640, 736)
 SKIP_FRAMES = 3             # detect on every 3rd frame (1 = every frame)
@@ -18,9 +17,9 @@ CONF = 0.25
 IOU = 0.50
 JPEG_QUALITY = 75           # stream quality (lower = faster)
 FRAME_SIZE = (960, 540)     # (width, height) every frame is resized to
-# default thresholds per mode: (safe_max, warning_max)
+
 THRESHOLDS = {"live": (3, 8), "video": (18, 40)}
-# -----------------------------------------------------------
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -30,9 +29,7 @@ ALLOWED_EXT = {"mp4", "avi", "mov", "mkv", "webm", "m4v"}
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024  # 1 GB upload limit
 
-# ---------------------------------------------------------------------------
-# Model (loaded once, warmed up so the first real frame is not slow)
-# ---------------------------------------------------------------------------
+
 print("Loading model:", MODEL_NAME)
 model = YOLO(MODEL_NAME)
 model(np.zeros((FRAME_SIZE[1], FRAME_SIZE[0], 3), np.uint8),
@@ -40,9 +37,7 @@ model(np.zeros((FRAME_SIZE[1], FRAME_SIZE[0], 3), np.uint8),
 print("Model ready.")
 
 
-# ---------------------------------------------------------------------------
-# Shared state
-# ---------------------------------------------------------------------------
+
 state_lock = threading.Lock()
 state = {
     "running": False,
@@ -112,9 +107,7 @@ def classify(people, safe_max, warning_max):
     return "CAUTION", "EVACUATE IMMEDIATELY", (0, 0, 255)
 
 
-# ---------------------------------------------------------------------------
-# Detection worker (runs in a background thread)
-# ---------------------------------------------------------------------------
+
 def detection_worker(mode, path, loop, stop):
     cap = cv2.VideoCapture(0) if mode == "live" else cv2.VideoCapture(path)
     if mode == "live":
@@ -129,7 +122,7 @@ def detection_worker(mode, path, loop, stop):
         cap.release()
         return
 
-    # for video files, play at the natural speed instead of as fast as possible
+ 
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 0
     if not (1 <= src_fps <= 120):
         src_fps = 30.0
@@ -138,7 +131,7 @@ def detection_worker(mode, path, loop, stop):
     frame_no = 0
     smooth_count = 0.0
     first_frame = True
-    boxes = []                       # last detected boxes, reused on skipped frames
+    boxes = []                      
     person_count = bicycle_count = car_count = motorcycle_count = 0
     peak = 0
     last_status = None
@@ -162,7 +155,7 @@ def detection_worker(mode, path, loop, stop):
                 break
             read_since_reset += 1
 
-            # make the frame smaller first (faster for everything)
+          
             frame = cv2.resize(frame, FRAME_SIZE)
 
             # run detection only on some frames
@@ -270,9 +263,9 @@ def start_worker(mode, path, source_name, loop):
         worker_thread.start()
 
 
-# ---------------------------------------------------------------------------
+
 # Routes
-# ---------------------------------------------------------------------------
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -282,8 +275,7 @@ def mjpeg_frames():
     last_id = -1
     while True:
         with frame_cond:
-            # wake when a new frame arrives; after 1s resend the last one so a
-            # closed browser tab is noticed and this generator can exit
+         
             frame_cond.wait_for(lambda: latest["id"] != last_id, timeout=1.0)
             jpeg = latest["jpeg"]
             last_id = latest["id"]
