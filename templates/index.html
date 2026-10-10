@@ -1,0 +1,683 @@
+{% set app_name = "CrowdGuard AI" %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ app_name }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script>try{var t=localStorage.getItem('cg-theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>
+</head>
+<body>
+
+<header class="shell topbar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="8" fill="var(--action)"/>
+      <circle cx="16" cy="16" r="8" fill="none" stroke="var(--action-ink)" stroke-width="2"/>
+      <circle cx="16" cy="16" r="3" fill="var(--action-ink)"/>
+    </svg>
+    <div>
+      <h1>{{ app_name }}</h1>
+      <p>Real-time crowd safety monitoring</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span class="conn" id="conn" data-state="wait"><span class="dot"></span><span id="connText">Connecting</span></span>
+    <button class="icon-btn" id="themeBtn" type="button" aria-label="Switch between light and dark theme">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="shell">
+
+  <!-- Signal board: the one place to look -->
+  <section class="board" id="board" data-status="IDLE" aria-label="Crowd status">
+    <div class="board-status" role="status">
+      <svg class="status-icon" id="statusIcon" viewBox="0 0 24 24" aria-hidden="true"></svg>
+      <div>
+        <div class="status-word" id="statusWord">Standby</div>
+        <div class="status-advice" id="statusAdvice">Choose a source to start monitoring</div>
+      </div>
+    </div>
+    <div class="board-count">
+      <div class="hero" id="heroCount">0</div>
+      <div class="hero-label">People in view</div>
+    </div>
+    <div class="board-meter">
+      <div class="meter-title">Crowd level</div>
+      <div class="meter" id="meter" aria-hidden="true">
+        <div class="seg seg-safe"><i></i></div>
+        <div class="seg seg-warn"><i></i></div>
+        <div class="seg seg-crit"><i></i></div>
+      </div>
+      <div class="ticks" id="ticks" aria-hidden="true"><span id="tickWarn"></span><span id="tickCrit"></span></div>
+    </div>
+  </section>
+
+  <div class="layout">
+
+    <!-- Left: video + controls -->
+    <div class="col">
+      <section class="stage" id="stage" data-status="IDLE">
+        <img id="feed" src="/video_feed" alt="Annotated camera or video feed with detection boxes around people and vehicles">
+        <div class="stage-tag" id="stageTag" hidden></div>
+      </section>
+      <div class="perf" id="perf">
+        <span>Frame rate <b id="perfFps">&ndash;</b></span>
+        <span>Detection time <b id="perfInfer">&ndash;</b></span>
+      </div>
+
+      <div class="row2">
+        <section class="card" aria-labelledby="srcTitle">
+          <h2 id="srcTitle">Source</h2>
+          <div class="tabs" role="tablist" aria-label="Video source" id="tablist">
+            <button class="tab" role="tab" id="tabLive" type="button" aria-selected="true" aria-controls="paneLive">Live camera</button>
+            <button class="tab" role="tab" id="tabVideo" type="button" aria-selected="false" aria-controls="paneVideo" tabindex="-1">Upload video</button>
+          </div>
+
+          <div class="pane" id="paneLive" role="tabpanel" aria-labelledby="tabLive">
+            <p class="hint">Uses the camera connected to this computer.</p>
+            <button class="btn primary" id="startLive" type="button">Start live monitoring</button>
+          </div>
+
+          <div class="pane" id="paneVideo" role="tabpanel" aria-labelledby="tabVideo" hidden>
+            <input class="sr-only file-input" type="file" id="file" accept="video/*,.mp4,.avi,.mov,.mkv,.webm,.m4v">
+            <label class="drop" id="drop" for="file">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span class="drop-title">Choose a video from your device</span>
+              <span class="drop-sub">or drop it here. MP4, AVI, MOV, MKV or WEBM, up to 1 GB.</span>
+            </label>
+            <div id="progressBox" hidden>
+              <div class="progress" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress"><div class="bar" id="bar"></div></div>
+              <p class="hint" id="progressText"></p>
+            </div>
+            <label class="check"><input type="checkbox" id="loop" checked> Loop video</label>
+            <div id="recentBox" hidden>
+              <p class="recent-title">Recent uploads</p>
+              <ul class="recent" id="recentList"></ul>
+            </div>
+          </div>
+
+          <div class="source-foot">
+            <button class="btn" id="stopBtn" type="button" disabled>Stop</button>
+            <p class="msg" id="msg" role="status"></p>
+          </div>
+        </section>
+
+        <section class="card limits" aria-labelledby="limTitle">
+          <h2 id="limTitle">Alert limits</h2>
+          <div class="field">
+            <label for="safeRange">Warning from <output id="safeVal">3</output> people</label>
+            <input type="range" id="safeRange" min="1" max="150" value="3">
+          </div>
+          <div class="field">
+            <label for="warnRange">Caution above <output id="warnVal">8</output> people</label>
+            <input type="range" id="warnRange" min="1" max="150" value="8">
+          </div>
+          <label class="check"><input type="checkbox" id="sound" checked> Sound alerts</label>
+        </section>
+      </div>
+    </div>
+
+    <!-- Right: numbers, chart, log -->
+    <div class="col">
+      <dl class="tiles">
+        <div class="tile"><dt>Peak crowd</dt><dd id="tilePeak">0</dd></div>
+        <div class="tile"><dt>Cars</dt><dd id="tileCar">0</dd></div>
+        <div class="tile"><dt>Motorbikes</dt><dd id="tileBike">0</dd></div>
+        <div class="tile"><dt>Bicycles</dt><dd id="tileCycle">0</dd></div>
+      </dl>
+
+      <section class="card" aria-labelledby="chartTitle">
+        <div class="card-head">
+          <h2 id="chartTitle">Crowd over time</h2>
+          <button class="link-btn" id="viewToggle" type="button" aria-pressed="false">View as table</button>
+        </div>
+        <p class="sub">People in view, one reading per second, last 2 minutes</p>
+        <div class="chart-wrap" id="chartWrap" tabindex="0" aria-label="Line chart of people in view over time. Use the left and right arrow keys to read each value.">
+          <svg id="chart" role="img" aria-hidden="true"></svg>
+          <div class="chart-empty" id="chartEmpty">Waiting for data. The chart fills in once monitoring starts.</div>
+          <div class="tip" id="tip" hidden>
+            <div class="tip-time" id="tipTime"></div>
+            <div class="tip-row"><span class="key"></span><span class="tip-val" id="tipVal"></span><span class="tip-name">people</span></div>
+            <div class="tip-status" id="tipStatus"></div>
+          </div>
+        </div>
+        <div class="table-wrap" id="tableWrap" hidden>
+          <table>
+            <thead><tr><th scope="col">Time</th><th scope="col">People</th><th scope="col">Status at current limits</th></tr></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+          <p class="empty" id="tableEmpty">No readings yet.</p>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="logTitle">
+        <h2 id="logTitle">Alert log</h2>
+        <ul class="log" id="alertList"></ul>
+        <p class="empty" id="alertEmpty">No alerts yet. Every change in crowd status is listed here.</p>
+      </section>
+    </div>
+
+  </div>
+</main>
+
+{% raw %}
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const NS = 'http://www.w3.org/2000/svg';
+  const EXT = ['mp4', 'avi', 'mov', 'mkv', 'webm', 'm4v'];
+
+  const ICONS = {
+    IDLE: '<circle cx="12" cy="12" r="9" stroke-dasharray="3.2 3.2"/>',
+    SAFE: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.7 2.7L16.5 9.5"/>',
+    WARNING: '<path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.2v.1"/>',
+    CAUTION: '<path d="M8.2 3h7.6L21 8.2v7.6L15.8 21H8.2L3 15.8V8.2z"/><path d="M12 7.5v5.5M12 16.2v.1"/>'
+  };
+  const LABEL = { IDLE: 'Standby', SAFE: 'Safe', WARNING: 'Warning', CAUTION: 'Caution' };
+
+  // ---------- state ----------
+  let limits = { safe: 3, warn: 8 };
+  let hist = [];
+  let geo = null;
+  let hoverT = null;
+  let tableMode = false;
+  let shownStatus = null;
+  let prevStatus = 'IDLE';
+  let lastPeople = 0;
+  let editUntil = 0;
+  let alertsKey = '';
+  let online = null;
+  let tabInit = false;
+  let localMsg = null;
+  let lastStats = null;
+  let audioCtx = null;
+  let timer = null;
+
+  // ---------- helpers ----------
+  const setText = (el, v) => { v = String(v); if (el.textContent !== v) el.textContent = v; };
+  const plural = (n) => n + (n === 1 ? ' person' : ' people');
+  const classify = (v) => (v < limits.safe ? 'SAFE' : v <= limits.warn ? 'WARNING' : 'CAUTION');
+
+  async function post(url, body) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      });
+      const d = await r.json().catch(() => ({}));
+      return Object.assign({}, d, { ok: r.ok && d.ok !== false });
+    } catch (e) {
+      return { ok: false, error: 'Cannot reach the server. Is app.py still running?' };
+    }
+  }
+
+  // ---------- theme ----------
+  const root = document.documentElement;
+  $('themeBtn').addEventListener('click', () => {
+    const cur = root.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    root.dataset.theme = next;
+    try { localStorage.setItem('cg-theme', next); } catch (e) { /* storage may be blocked */ }
+  });
+
+  // ---------- sound ----------
+  function unlockAudio() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) { /* no audio available */ }
+  }
+  function beep(freq, at, dur) {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(0.12, at + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(at); o.stop(at + dur + 0.05);
+  }
+  function alertSound(status) {
+    if (!audioCtx || !$('sound').checked) return;
+    const t = audioCtx.currentTime;
+    if (status === 'CAUTION') { beep(880, t, 0.18); beep(880, t + 0.3, 0.18); beep(880, t + 0.6, 0.18); }
+    else if (status === 'WARNING') { beep(660, t, 0.25); }
+  }
+
+  // ---------- messages ----------
+  function setMsg(text, kind) { localMsg = text ? { text, kind: kind || 'info' } : null; paintMsg(lastStats); }
+  function paintMsg(s) {
+    let m = localMsg;
+    if (!m && s && s.error) m = { text: s.error, kind: 'error' };
+    if (!m && s && s.message) m = { text: s.message, kind: 'info' };
+    const el = $('msg');
+    setText(el, m ? m.text : '');
+    el.dataset.kind = m ? m.kind : '';
+  }
+
+  // ---------- meter ----------
+  function renderMeter(people, safe, warn) {
+    const b1 = safe - 0.5, b2 = warn + 0.5;
+    const max = Math.max(Math.ceil(warn * 1.4), Math.ceil(people * 1.15), warn + 4);
+    const starts = [0, b1, b2], ends = [b1, b2, max];
+    const segs = $('meter').children;
+    for (let i = 0; i < 3; i++) {
+      const w = ends[i] - starts[i];
+      segs[i].style.flex = w + ' ' + w + ' 0';
+      const frac = Math.max(0, Math.min(1, (people - starts[i]) / w));
+      segs[i].firstElementChild.style.width = (frac * 100) + '%';
+    }
+    const warnTick = $('tickWarn'), critTick = $('tickCrit');
+    warnTick.style.left = (b1 / max * 100) + '%';
+    critTick.style.left = (b2 / max * 100) + '%';
+    setText(warnTick, 'Warning from ' + safe);
+    setText(critTick, 'Caution above ' + warn);
+  }
+
+  // ---------- chart ----------
+  const svg = $('chart'), chartWrap = $('chartWrap'), tip = $('tip');
+  const mk = (tag, attrs, text) => {
+    const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  function niceStep(max) {
+    const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+  }
+
+  function hideHover() {
+    hoverT = null;
+    tip.hidden = true;
+    if (geo) { geo.cross.style.visibility = 'hidden'; geo.hdot.style.visibility = 'hidden'; }
+  }
+
+  function showHover(i) {
+    if (!geo || !hist.length) return;
+    i = Math.max(0, Math.min(hist.length - 1, i));
+    const d = hist[i];
+    hoverT = d.t;
+    const x = geo.X(i), y = geo.Y(d.people);
+    geo.cross.setAttribute('x1', x); geo.cross.setAttribute('x2', x);
+    geo.cross.style.visibility = 'visible';
+    geo.hdot.setAttribute('cx', x); geo.hdot.setAttribute('cy', y);
+    geo.hdot.style.visibility = 'visible';
+    setText($('tipTime'), d.t);
+    setText($('tipVal'), d.people);
+    setText($('tipStatus'), LABEL[classify(d.people)]);
+    tip.hidden = false;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = x + 14;
+    if (left + tw > geo.w - 4) left = x - tw - 14;
+    tip.style.left = Math.max(4, left) + 'px';
+    tip.style.top = Math.max(4, Math.min(y - th / 2, geo.h - th - 4)) + 'px';
+  }
+
+  function drawChart() {
+    if (tableMode) return;
+    const w = Math.max(chartWrap.clientWidth, 260), h = 230;
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    svg.replaceChildren();
+    const n = hist.length;
+    $('chartEmpty').hidden = n > 0;
+    if (!n) { geo = null; tip.hidden = true; return; }
+
+    const m = { l: 34, r: 36, t: 16, b: 28 };
+    const pw = w - m.l - m.r, ph = h - m.t - m.b;
+    const maxV = Math.max.apply(null, hist.map((d) => d.people));
+    const top = Math.max(maxV, limits.warn, 4) * 1.12;
+    const step = niceStep(top);
+    const yMax = Math.ceil(top / step) * step;
+    const X = (i) => m.l + (n === 1 ? pw / 2 : (i / (n - 1)) * pw);
+    const Y = (v) => m.t + ph - (v / yMax) * ph;
+
+    // hairline grid + y ticks (the baseline at 0 is drawn a step darker)
+    for (let v = 0; v <= yMax + 1e-9; v += step) {
+      svg.appendChild(mk('line', { class: v === 0 ? 'axis-line' : 'gl', x1: m.l, x2: w - m.r, y1: Y(v), y2: Y(v) }));
+      svg.appendChild(mk('text', { class: 'tick', x: m.l - 8, y: Y(v) + 4, 'text-anchor': 'end' }, v));
+    }
+
+    // alert limits as solid hairlines, labelled in words
+    const yW = Y(limits.safe), yC = Y(limits.warn);
+    svg.appendChild(mk('line', { class: 'thr thr-warn', x1: m.l, x2: w - m.r, y1: yW, y2: yW }));
+    svg.appendChild(mk('line', { class: 'thr thr-crit', x1: m.l, x2: w - m.r, y1: yC, y2: yC }));
+    const close = yW - yC < 16;
+    svg.appendChild(mk('text', { class: 'thr-label', x: m.l + 6, y: yC - 5 }, 'Caution above ' + limits.warn));
+    svg.appendChild(mk('text', { class: 'thr-label', x: m.l + 6, y: close ? yW + 14 : yW - 5 }, 'Warning from ' + limits.safe));
+
+    // area + line
+    let d = '';
+    for (let i = 0; i < n; i++) d += (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(hist[i].people).toFixed(1);
+    svg.appendChild(mk('path', { class: 'area', d: d + 'L' + X(n - 1).toFixed(1) + ' ' + Y(0) + 'L' + X(0).toFixed(1) + ' ' + Y(0) + 'Z' }));
+    svg.appendChild(mk('path', { class: 'line', d: d }));
+
+    // x labels: first, middle, last
+    const idx = n === 1 ? [0] : n === 2 ? [0, 1] : [0, Math.floor((n - 1) / 2), n - 1];
+    idx.forEach((i, k) => {
+      const anchor = k === 0 && idx.length > 1 ? 'start' : k === idx.length - 1 && idx.length > 1 ? 'end' : 'middle';
+      svg.appendChild(mk('text', { class: 'tick', x: X(i), y: h - 8, 'text-anchor': anchor }, hist[i].t));
+    });
+
+    // end marker with its value (the one direct label)
+    const last = hist[n - 1].people, ex = X(n - 1), ey = Y(last);
+    svg.appendChild(mk('circle', { class: 'dot', cx: ex, cy: ey, r: 4.5 }));
+    svg.appendChild(mk('text', { class: 'endlabel', x: ex + 9, y: ey + 4.5, 'text-anchor': 'start' }, last));
+
+    // hover layer
+    const cross = mk('line', { class: 'cross', x1: 0, x2: 0, y1: m.t, y2: m.t + ph });
+    const hdot = mk('circle', { class: 'hdot', cx: 0, cy: 0, r: 4.5 });
+    const hit = mk('rect', { x: m.l, y: m.t, width: pw, height: ph, fill: 'transparent' });
+    svg.append(cross, hdot, hit);
+    geo = { w, h, X, Y, cross, hdot };
+
+    hit.addEventListener('pointermove', (e) => {
+      const r = svg.getBoundingClientRect();
+      const px = (e.clientX - r.left) * (w / r.width) - m.l;
+      showHover(n === 1 ? 0 : Math.round((px / pw) * (n - 1)));
+    });
+    hit.addEventListener('pointerleave', hideHover);
+
+    if (hoverT) {
+      const k = hist.findIndex((p) => p.t === hoverT);
+      if (k >= 0) showHover(k); else hideHover();
+    }
+  }
+
+  chartWrap.addEventListener('keydown', (e) => {
+    if (!hist.length) return;
+    let i = hoverT ? hist.findIndex((p) => p.t === hoverT) : hist.length - 1;
+    if (i < 0) i = hist.length - 1;
+    if (e.key === 'ArrowLeft') i--;
+    else if (e.key === 'ArrowRight') i++;
+    else if (e.key === 'Home') i = 0;
+    else if (e.key === 'End') i = hist.length - 1;
+    else if (e.key === 'Escape') { hideHover(); return; }
+    else return;
+    e.preventDefault();
+    showHover(i);
+  });
+  chartWrap.addEventListener('focusout', hideHover);
+
+  function drawTable() {
+    const body = $('tableBody');
+    body.replaceChildren();
+    $('tableEmpty').hidden = hist.length > 0;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      const tr = document.createElement('tr');
+      [hist[i].t, hist[i].people, LABEL[classify(hist[i].people)]].forEach((v) => {
+        const td = document.createElement('td');
+        td.textContent = v;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    }
+  }
+
+  function paintSeries() { if (tableMode) drawTable(); else drawChart(); }
+
+  $('viewToggle').addEventListener('click', () => {
+    tableMode = !tableMode;
+    $('viewToggle').textContent = tableMode ? 'View as chart' : 'View as table';
+    $('viewToggle').setAttribute('aria-pressed', String(tableMode));
+    chartWrap.hidden = tableMode;
+    $('tableWrap').hidden = !tableMode;
+    paintSeries();
+  });
+  new ResizeObserver(() => { if (!tableMode) drawChart(); }).observe(chartWrap);
+
+  // ---------- alert log ----------
+  function drawAlerts(list) {
+    const key = JSON.stringify(list);
+    if (key === alertsKey) return;
+    alertsKey = key;
+    const ul = $('alertList');
+    ul.replaceChildren();
+    $('alertEmpty').hidden = list.length > 0;
+    list.forEach((a) => {
+      const li = document.createElement('li');
+      const t = document.createElement('span'); t.className = 't'; t.textContent = a.time;
+      const chip = document.createElement('span'); chip.className = 'chip'; chip.dataset.status = a.status;
+      chip.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[a.status] || '') + '</svg>';
+      chip.appendChild(document.createTextNode(LABEL[a.status] || a.status));
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = plural(a.people);
+      li.append(t, chip, n);
+      ul.appendChild(li);
+    });
+  }
+
+  // ---------- render one /stats payload ----------
+  function render(s) {
+    lastStats = s;
+    const st = LABEL[s.status] ? s.status : 'IDLE';
+    $('board').dataset.status = st;
+    $('stage').dataset.status = st;
+    if (shownStatus !== st) {
+      shownStatus = st;
+      $('statusIcon').innerHTML = ICONS[st];
+      setText($('statusWord'), LABEL[st]);
+    }
+    setText($('statusAdvice'), s.advice || '');
+    setText($('heroCount'), s.people);
+    lastPeople = s.people;
+
+    setText($('tilePeak'), s.peak);
+    setText($('tileCar'), s.car);
+    setText($('tileBike'), s.bike);
+    setText($('tileCycle'), s.bicycle);
+    setText($('perfFps'), s.running ? s.fps.toFixed(1) + ' fps' : '–');
+    setText($('perfInfer'), s.running && s.infer_ms ? s.infer_ms + ' ms' : '–');
+
+    let tag = '';
+    if (s.running) tag = s.mode === 'live' ? 'Live camera' : 'Video: ' + s.source;
+    else if (s.message) tag = s.message;
+    setText($('stageTag'), tag);
+    $('stageTag').hidden = !tag;
+    $('stopBtn').disabled = !s.running;
+
+    if (!tabInit && s.running) { tabInit = true; selectTab(s.mode === 'video' ? 'video' : 'live'); }
+
+    if (Date.now() > editUntil) {
+      limits = { safe: s.safe_max, warn: s.warning_max };
+      syncRange($('safeRange'), $('safeVal'), s.safe_max);
+      syncRange($('warnRange'), $('warnVal'), s.warning_max);
+    }
+    renderMeter(s.people, limits.safe, limits.warn);
+
+    hist = s.history || [];
+    paintSeries();
+    drawAlerts(s.alerts || []);
+    paintMsg(s);
+
+    if (s.running && st !== prevStatus && (st === 'WARNING' || st === 'CAUTION')) alertSound(st);
+    prevStatus = st;
+  }
+
+  function syncRange(inp, out, v) {
+    if (+inp.max < v) inp.max = v;
+    if (+inp.value !== v) inp.value = v;
+    setText(out, v);
+  }
+
+  // ---------- polling ----------
+  function setConn(ok) {
+    if (ok === online) return;
+    const was = online;
+    online = ok;
+    $('conn').dataset.state = ok ? 'on' : 'off';
+    setText($('connText'), ok ? 'Connected' : 'Server offline');
+    if (ok && was === false) $('feed').src = '/video_feed?t=' + Date.now();
+  }
+  async function poll() {
+    clearTimeout(timer);
+    try {
+      const r = await fetch('/stats', { cache: 'no-store' });
+      if (!r.ok) throw new Error('bad status');
+      render(await r.json());
+      setConn(true);
+    } catch (e) {
+      setConn(false);
+    }
+    timer = setTimeout(poll, 1000);
+  }
+
+  // ---------- source tabs ----------
+  function selectTab(which) {
+    const live = which === 'live';
+    $('tabLive').setAttribute('aria-selected', String(live));
+    $('tabVideo').setAttribute('aria-selected', String(!live));
+    $('tabLive').tabIndex = live ? 0 : -1;
+    $('tabVideo').tabIndex = live ? -1 : 0;
+    $('paneLive').hidden = !live;
+    $('paneVideo').hidden = live;
+  }
+  $('tabLive').addEventListener('click', () => selectTab('live'));
+  $('tabVideo').addEventListener('click', () => selectTab('video'));
+  $('tablist').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const toVideo = $('tabLive').getAttribute('aria-selected') === 'true';
+    selectTab(toVideo ? 'video' : 'live');
+    (toVideo ? $('tabVideo') : $('tabLive')).focus();
+  });
+
+  // ---------- start / stop ----------
+  $('startLive').addEventListener('click', async () => {
+    unlockAudio();
+    setMsg(null);
+    $('startLive').disabled = true;
+    const r = await post('/start', { mode: 'live' });
+    $('startLive').disabled = false;
+    if (!r.ok) setMsg(r.error || 'Could not start the camera.', 'error');
+    poll();
+  });
+  $('stopBtn').addEventListener('click', async () => {
+    setMsg(null);
+    await post('/stop');
+    poll();
+  });
+
+  async function startVideo(filename) {
+    unlockAudio();
+    setMsg(null);
+    const r = await post('/start', { mode: 'video', filename, loop: $('loop').checked });
+    if (!r.ok) setMsg(r.error || 'Could not start this video.', 'error');
+    poll();
+    return r.ok;
+  }
+
+  // ---------- upload from the user's device ----------
+  function uploadFile(file) {
+    if (!file) return;
+    const ext = file.name.indexOf('.') >= 0 ? file.name.split('.').pop().toLowerCase() : '';
+    if (EXT.indexOf(ext) < 0) {
+      setMsg('That file type is not supported. Use MP4, AVI, MOV, MKV or WEBM.', 'error');
+      return;
+    }
+    unlockAudio();
+    setMsg(null);
+    const box = $('progressBox'), bar = $('bar'), txt = $('progressText'), prog = $('progress');
+    box.hidden = false;
+    bar.style.width = '0%';
+    prog.setAttribute('aria-valuenow', '0');
+    txt.textContent = 'Uploading ' + file.name + '...';
+
+    const fail = (msg) => { box.hidden = true; setMsg(msg, 'error'); };
+    const fd = new FormData();
+    fd.append('video', file);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/upload');
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const p = Math.round((e.loaded / e.total) * 100);
+      bar.style.width = p + '%';
+      prog.setAttribute('aria-valuenow', String(p));
+      txt.textContent = 'Uploading ' + file.name + '... ' + p + '%';
+    };
+    xhr.onload = async () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+      if (xhr.status === 200 && data.ok) {
+        txt.textContent = 'Upload complete. Starting analysis...';
+        await startVideo(data.filename);
+        loadRecent();
+        setTimeout(() => { box.hidden = true; }, 900);
+      } else {
+        fail(data.error || 'Upload failed.');
+      }
+    };
+    xhr.onerror = () => fail('Upload failed. Is app.py still running?');
+    xhr.send(fd);
+  }
+
+  const fileInput = $('file'), drop = $('drop');
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files && fileInput.files[0];
+    fileInput.value = '';              // lets the same file be chosen again
+    uploadFile(f);
+  });
+  ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, () => drop.classList.remove('over')));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+  // a file dropped outside the box must not navigate away from the dashboard
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
+
+  async function loadRecent() {
+    try {
+      const r = await fetch('/videos', { cache: 'no-store' });
+      const items = (await r.json()).slice(0, 5);
+      const ul = $('recentList');
+      ul.replaceChildren();
+      $('recentBox').hidden = items.length === 0;
+      items.forEach((v) => {
+        const li = document.createElement('li');
+        const name = document.createElement('span'); name.className = 'name'; name.textContent = v.label; name.title = v.label;
+        const size = document.createElement('span'); size.className = 'size'; size.textContent = v.size_mb + ' MB';
+        const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'btn small'; btn.textContent = 'Play';
+        btn.addEventListener('click', () => startVideo(v.name));
+        li.append(name, size, btn);
+        ul.appendChild(li);
+      });
+    } catch (e) { /* the status pill already shows the server is unreachable */ }
+  }
+
+  // ---------- alert limits ----------
+  const safeR = $('safeRange'), warnR = $('warnRange');
+  function limitsInput(changed) {
+    editUntil = Date.now() + 1500;
+    if (+safeR.value > +warnR.value) { if (changed === 'safe') warnR.value = safeR.value; else safeR.value = warnR.value; }
+    limits = { safe: +safeR.value, warn: +warnR.value };
+    setText($('safeVal'), limits.safe);
+    setText($('warnVal'), limits.warn);
+    renderMeter(lastPeople, limits.safe, limits.warn);
+    paintSeries();
+  }
+  async function limitsSave() {
+    const r = await post('/set_thresholds', { safe_max: +safeR.value, warning_max: +warnR.value });
+    editUntil = Date.now() + 600;
+    if (!r.ok) setMsg(r.error || 'Could not save the limits.', 'error');
+  }
+  safeR.addEventListener('input', () => limitsInput('safe'));
+  warnR.addEventListener('input', () => limitsInput('warn'));
+  safeR.addEventListener('change', limitsSave);
+  warnR.addEventListener('change', limitsSave);
+  $('sound').addEventListener('change', () => { if ($('sound').checked) unlockAudio(); });
+
+  // ---------- go ----------
+  renderMeter(0, limits.safe, limits.warn);
+  loadRecent();
+  poll();
+})();
+</script>
+{% endraw %}
+</body>
+</html>
